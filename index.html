@@ -378,6 +378,10 @@ footer{margin-top:42px;border-top:1px solid var(--line);padding:22px 0 40px}
           <label>Fee Paid ($)</label>
           <input type="number" id="inp-fee" value="175" min="0" step="1">
         </div>
+        <div class="fg">
+          <label>Fee Paid (₹)</label>
+          <input type="number" id="inp-fee-inr" placeholder="e.g. 4986.24" min="0" step="0.01">
+        </div>
         <div class="fg wide">
           <label>Notes</label>
           <input type="text" id="inp-notes" placeholder="optional…">
@@ -460,7 +464,7 @@ const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
 /* ---------- SHARED DATABASE (everyone on the link sees the same rows) ---------- */
 async function loadData(){
-  const {data,error}=await sb.from('personal_accounts').select('*').order('created_at',{ascending:true});
+  const {data,error}=await sb.from('accounts').select('*').order('created_at',{ascending:true});
   if(error) throw error;
   accounts=(data||[]).map(r=>({
     id:Number(r.id),
@@ -469,6 +473,7 @@ async function loadData(){
     inst:r.inst||'',
     size:Number(r.size)||0,
     fee:Number(r.fee)||0,
+    fee_inr:Number(r.fee_inr)||0,
     notes:r.notes||'',
     status:r.status||'eval',
     split:Number(r.split)||90,
@@ -524,50 +529,58 @@ async function addAccount(){
     inst:document.getElementById('inp-inst').value,
     size:parseInt(document.getElementById('inp-size').value),
     fee:parseFloat(document.getElementById('inp-fee').value)||0,
+    fee_inr:parseFloat(document.getElementById('inp-fee-inr').value)||0,
     notes:document.getElementById('inp-notes').value.trim(),
     split:parseInt(document.getElementById('inp-split').value)||90,
     status:'eval',
     payouts:[]
   };
   setSync('Saving…',false);
-  const {error}=await sb.from('personal_accounts').insert(row);
+  const {error}=await sb.from('accounts').insert(row);
   if(error){setSync('Save failed',false);alert('Could not save: '+error.message);return;}
   document.getElementById('inp-notes').value='';
+  document.getElementById('inp-fee-inr').value='';
   await loadData();populateFirms();render();setSync('Live · synced',true);
 }
 async function setStatus(id,s){
   setSync('Saving…',false);
-  const {error}=await sb.from('personal_accounts').update({status:s}).eq('id',id);
+  const {error}=await sb.from('accounts').update({status:s}).eq('id',id);
   if(error){setSync('Save failed',false);return;}
   await loadData();render();setSync('Live · synced',true);
 }
 async function addPayout(id){
   const inp=document.getElementById('pin-'+id);
+  const inrInp=document.getElementById('pin-inr-'+id);
   const v=parseFloat(inp.value);
   if(!v||v<=0)return;
   const a=accounts.find(x=>x.id===id);
   if(!a)return;
   const gross=v;
   const net=Math.round(gross*(a.split||100)/100);
-  const payouts=[...a.payouts,{gross,amt:net,date:todayStr()}];
+  const inr_gross=parseFloat(inrInp.value)||0;
+  const inr_net=inr_gross>0?Math.round(inr_gross*(a.split||100)/100):0;
+  const payouts=[...a.payouts,{gross,amt:net,inr_gross,inr_net,date:todayStr()}];
   const status=a.status==='blown'?'blown':'paid';
   inp.value='';
+  inrInp.value='';
   setSync('Saving…',false);
-  const {error}=await sb.from('personal_accounts').update({payouts,status}).eq('id',id);
+  const {error}=await sb.from('accounts').update({payouts,status}).eq('id',id);
   if(error){setSync('Save failed',false);return;}
   await loadData();render();setSync('Live · synced',true);
 }
 async function deleteAccount(id){
   if(!confirm('Delete this account permanently? This removes it for everyone on the link.'))return;
   setSync('Saving…',false);
-  const {error}=await sb.from('personal_accounts').delete().eq('id',id);
+  const {error}=await sb.from('accounts').delete().eq('id',id);
   if(error){setSync('Save failed',false);return;}
   await loadData();render();setSync('Live · synced',true);
 }
 
 /* ---------- HELPERS ---------- */
 function money(n){return '$'+Math.round(Math.abs(n)).toLocaleString();}
+function moneyInr(n){return '₹'+Math.abs(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function signed(n){return (n>=0?'+':'-')+money(n);}
+function signedInr(n){return (n>=0?'+':'-')+moneyInr(n);}
 
 function stats(){
   const total=accounts.length;
@@ -594,7 +607,11 @@ function stats(){
   const inProfit=accounts.filter(a=>a.payouts.reduce((s,p)=>s+p.amt,0)>a.fee).length;
   const splitDist={70:0,80:0,90:0,95:0,100:0};
   accounts.forEach(a=>{ const s=a.split||100; splitDist[s]=(splitDist[s]||0)+1; });
-  return {total,blown,funded,paid,ev,totalFees,totalPay,totalGross,net,roi,passed,passRate,blowRate,cycles,avgPay,avgGross,cpw,avgSplit,bestPay,bestGross,inProfit,splitDist,allPay};
+  const totalFeesInr=accounts.reduce((s,a)=>s+(a.fee_inr||0),0);
+  const totalPayInr=allPay.reduce((s,p)=>s+(p.inr_net||0),0);
+  const totalGrossInr=allPay.reduce((s,p)=>s+(p.inr_gross||0),0);
+  const netInr=totalPayInr-totalFeesInr;
+  return {total,blown,funded,paid,ev,totalFees,totalPay,totalGross,net,roi,passed,passRate,blowRate,cycles,avgPay,avgGross,cpw,avgSplit,bestPay,bestGross,inProfit,splitDist,allPay,totalFeesInr,totalPayInr,totalGrossInr,netInr};
 }
 
 /* ---------- RENDER ---------- */
@@ -666,6 +683,9 @@ function renderCards(){
     const recover=Math.min(pay/(a.fee||1)*100,100);
     const split=a.split||100;
     const showGross=gross>0&&split<100;
+    const hasInrFee=a.fee_inr>0;
+    const payInr=a.payouts.reduce((s,p)=>s+(p.inr_net||0),0);
+    const hasInrPay=payInr>0;
     return `<div class="acct" style="animation-delay:${i*0.03}s">
       <div class="acct-top">
         <div>
@@ -683,8 +703,8 @@ function renderCards(){
       </div>
       <div class="acct-flow">
         <div class="flow-row">
-          <span class="fk">Fee <span class="fee">${money(a.fee)}</span></span>
-          <span class="fk">Your cut <span class="pay">${pay>0?money(pay):'$0'}</span></span>
+          <span class="fk">Fee <span class="fee">${money(a.fee)}${hasInrFee?` <span style="color:var(--dim);font-size:10px">(₹${a.fee_inr.toLocaleString('en-IN')})</span>`:''}</span>
+          <span class="fk">Your cut <span class="pay">${pay>0?money(pay):'$0'}${hasInrPay?` <span style="color:var(--dim);font-size:10px">(₹${payInr.toLocaleString('en-IN')})</span>`:''}</span>
         </div>
         ${showGross?`<div class="flow-row" style="font-size:11px"><span class="fk">Gross P&L <span style="color:var(--dim)">${money(gross)}</span></span><span class="fk">After ${split}% split →</span></div>`:''}
         <div class="flow-bar"><i style="width:${recover}%"></i></div>
@@ -701,7 +721,8 @@ function renderCards(){
           <button class="bdel" onclick="deleteAccount(${a.id})">Delete</button>
         </div>
         <div class="row">
-          <input class="pin" type="number" id="pin-${a.id}" placeholder="Enter gross P&L $" min="0">
+          <input class="pin" type="number" id="pin-${a.id}" placeholder="Gross P&L $" min="0" style="flex:1">
+          <input class="pin" type="number" id="pin-inr-${a.id}" placeholder="₹ amount" min="0" style="flex:1">
           <button class="bp" onclick="addPayout(${a.id})">+ Pay</button>
         </div>
         ${a.payouts.length?`<div class="paychip">${a.payouts.length} payout${a.payouts.length>1?'s':''} · ${split}% applied automatically</div>`:''}
@@ -759,30 +780,35 @@ function renderCharts(){
 function renderAnalysis(){
   const s=stats();
 
-  // Fees
   const byStatus={eval:0,funded:0,paid:0,blown:0};
-  accounts.forEach(a=>byStatus[a.status]+=a.fee);
+  const byStatusInr={eval:0,funded:0,paid:0,blown:0};
+  accounts.forEach(a=>{byStatus[a.status]+=a.fee;byStatusInr[a.status]+=(a.fee_inr||0);});
   document.getElementById('an-fees').innerHTML=[
-    ['Total fees paid',money(s.totalFees),'a'],
-    ['Fees on blown accounts',money(byStatus.blown),'r'],
-    ['Fees on passed accounts',money(byStatus.funded+byStatus.paid),'g'],
-    ['Fees still in eval',money(byStatus.eval),'a'],
+    ['Total fees ($)',money(s.totalFees),'a'],
+    ['Total fees (₹)',s.totalFeesInr>0?moneyInr(s.totalFeesInr):'—','a'],
+    ['Fees on blown accts',money(byStatus.blown)+(byStatusInr.blown>0?` / ${moneyInr(byStatusInr.blown)}`:''),'r'],
+    ['Fees on passed accts',money(byStatus.funded+byStatus.paid),'g'],
+    ['Fees in eval',money(byStatus.eval),'a'],
     ['Fee recovery rate',s.totalFees>0?Math.round(s.totalPay/s.totalFees*100)+'%':'—',s.totalPay>=s.totalFees?'g':'r'],
-    ['Cost per passed account',s.cpw!==null?money(s.cpw):'—','a'],
+    ['Cost per passed acct',s.cpw!==null?money(s.cpw):'—','a'],
   ].map(([k,v,c])=>`<div class="an-row"><span class="ak">${k}</span><span class="av ${c}">${v}</span></div>`).join('');
 
-  // Payout log — show gross → net
+  // Payout log — show USD gross→net and INR if available
   const log=accounts.flatMap(a=>a.payouts.map(p=>({
     firm:a.firm,inst:a.inst,split:a.split||100,
-    gross:p.gross??p.amt,amt:p.amt,date:p.date
+    gross:p.gross??p.amt,amt:p.amt,
+    inr_gross:p.inr_gross||0,inr_net:p.inr_net||0,
+    date:p.date
   })));
   document.getElementById('an-payouts').innerHTML=log.length?
     log.sort((a,b)=>b.date.localeCompare(a.date)).map(p=>{
       const hasGross=p.gross>p.amt;
+      const hasInr=p.inr_net>0;
       return `<div class="an-row">
         <span class="ak">${p.firm} · ${p.inst} · ${p.date}</span>
-        <span class="av g" style="text-align:right">
-          ${hasGross?`<span style="color:var(--dim);font-size:10px">${money(p.gross)} → </span>`:''}<span>+${money(p.amt)}</span>
+        <span class="av g" style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+          <span>${hasGross?`<span style="color:var(--dim);font-size:10px">${money(p.gross)} → </span>`:''}+${money(p.amt)}</span>
+          ${hasInr?`<span style="color:var(--dim);font-size:10px">${p.inr_gross>0?moneyInr(p.inr_gross)+' → ':''}<span style="color:var(--pos)">${moneyInr(p.inr_net)}</span></span>`:''}
         </span>
       </div>`;
     }).join('')
@@ -798,15 +824,15 @@ function renderAnalysis(){
     return `<div class="an-row"><span class="ak"><b style="font-family:var(--display)">${f}</b> · ${d.n} acct${d.n>1?'s':''} · ${d.pass}✓ ${d.blown}✗</span><span class="av ${net>=0?'g':'r'}">${net===0?'$0':signed(net)}${roi!==null?` <span style="font-size:10px;color:var(--dim)">(${roi}% ROI)</span>`:''}</span></div>`;
   }).join(''):'<div class="an-empty">No data yet</div>';
 
-  // Goal outlook
   const rem=GOAL-s.totalPay;
   document.getElementById('an-goal').innerHTML=[
-    ['Collected so far',money(s.totalPay),'g'],
+    ['Collected so far ($)',money(s.totalPay),'g'],
+    ['Collected so far (₹)',s.totalPayInr>0?moneyInr(s.totalPayInr):'—','g'],
     ['Remaining to $20K',rem>0?money(rem):'GOAL REACHED 🎯',rem>0?'a':'g'],
     ['Avg net payout',s.avgPay!==null?money(s.avgPay):'—','a'],
-    ['Avg gross P&L',s.avgGross!==null?money(s.avgGross):'—','a'],
     ['Payouts needed at avg',s.avgPay&&rem>0?Math.ceil(rem/s.avgPay)+' more':(rem<=0?'Done 🎯':'—'),'a'],
-    ['Net position',s.net===0?'$0':signed(s.net),s.net>=0?'g':'r'],
+    ['Net P&L ($)',s.net===0?'$0':signed(s.net),s.net>=0?'g':'r'],
+    ['Net P&L (₹)',s.netInr!==0&&(s.totalFeesInr>0||s.totalPayInr>0)?signedInr(s.netInr):'—',s.netInr>=0?'g':'r'],
   ].map(([k,v,c])=>`<div class="an-row"><span class="ak">${k}</span><span class="av ${c}">${v}</span></div>`).join('');
 
   // Split analysis
@@ -870,7 +896,7 @@ function showSetupError(msg){
 
   // live multi-user sync: realtime push + 30s poll fallback
   try{
-    sb.channel('rt-personal')
+    sb.channel('rt-accounts')
       .on('postgres_changes',{event:'*',schema:'public',table:'accounts'},autoRefresh)
       .subscribe();
   }catch(e){}
