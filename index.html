@@ -464,7 +464,7 @@ const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
 /* ---------- SHARED DATABASE (everyone on the link sees the same rows) ---------- */
 async function loadData(){
-  const {data,error}=await sb.from('accounts').select('*').order('created_at',{ascending:true});
+  const {data,error}=await sb.from('personal_accounts').select('*').order('created_at',{ascending:true});
   if(error) throw error;
   accounts=(data||[]).map(r=>({
     id:Number(r.id),
@@ -536,7 +536,7 @@ async function addAccount(){
     payouts:[]
   };
   setSync('Saving…',false);
-  const {error}=await sb.from('accounts').insert(row);
+  const {error}=await sb.from('personal_accounts').insert(row);
   if(error){setSync('Save failed',false);alert('Could not save: '+error.message);return;}
   document.getElementById('inp-notes').value='';
   document.getElementById('inp-fee-inr').value='';
@@ -544,7 +544,7 @@ async function addAccount(){
 }
 async function setStatus(id,s){
   setSync('Saving…',false);
-  const {error}=await sb.from('accounts').update({status:s}).eq('id',id);
+  const {error}=await sb.from('personal_accounts').update({status:s}).eq('id',id);
   if(error){setSync('Save failed',false);return;}
   await loadData();render();setSync('Live · synced',true);
 }
@@ -564,14 +564,14 @@ async function addPayout(id){
   inp.value='';
   inrInp.value='';
   setSync('Saving…',false);
-  const {error}=await sb.from('accounts').update({payouts,status}).eq('id',id);
+  const {error}=await sb.from('personal_accounts').update({payouts,status}).eq('id',id);
   if(error){setSync('Save failed',false);return;}
   await loadData();render();setSync('Live · synced',true);
 }
 async function deleteAccount(id){
   if(!confirm('Delete this account permanently? This removes it for everyone on the link.'))return;
   setSync('Saving…',false);
-  const {error}=await sb.from('accounts').delete().eq('id',id);
+  const {error}=await sb.from('personal_accounts').delete().eq('id',id);
   if(error){setSync('Save failed',false);return;}
   await loadData();render();setSync('Live · synced',true);
 }
@@ -896,7 +896,7 @@ function showSetupError(msg){
 
   // live multi-user sync: realtime push + 30s poll fallback
   try{
-    sb.channel('rt-accounts')
+    sb.channel('rt-personal')
       .on('postgres_changes',{event:'*',schema:'public',table:'accounts'},autoRefresh)
       .subscribe();
   }catch(e){}
